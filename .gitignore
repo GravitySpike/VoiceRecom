@@ -1,0 +1,9 @@
+temp_download/
+vocal_db/
+vocal_features/
+error_log.txt
+*.npy
+*.wav
+__pycache__/
+.env
+pretrained_models/
