@@ -1,8 +1,6 @@
-temp_download/
-vocal_db/
-vocal_features/
+vocal_db
+document
 error_log.txt
-*.npy
 *.wav
 __pycache__/
 .env
