@@ -5,18 +5,51 @@ import time
 import random
 import numpy as np
 import librosa
+import torch
+import pesto
 from spleeter.separator import Separator
 
-def extract_features(file_path, output_path):
-    """보컬 파일에서 MFCC 특징을 추출하여 저장 (매칭 속도 최적화)"""
+def extract_advanced_features(file_path, output_path, youtube_url):
+    """PESTO 분석 결과(4개 반환값)를 정확히 반영한 최종 버전"""
     try:
-        y, sr = librosa.load(file_path, sr=22050)
+        # 1. 오디오 로드 및 텐서 변환
+        y, sr = librosa.load(file_path, sr=16000)
+        y_tensor = torch.from_numpy(y).unsqueeze(0) # mono 오디오 텐서화
+        
+        # 2. MFCC 추출
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
         mfcc_scaled = np.mean(mfcc.T, axis=0)
-        np.save(output_path, mfcc_scaled)
+        
+        # 3. PESTO 정밀 분석 (분석 결과 4개 인자 반영)
+        # 반환 순서: times, pitches(semitones), confidence, activations
+        times, pitches, confidence, _ = pesto.predict(y_tensor, sr)
+        
+        # 텐서를 넘파이 배열로 변환
+        pitch_series = pitches.squeeze().numpy()
+        time_series = times.numpy()
+        conf_series = confidence.squeeze().numpy()
+        
+        # [중요] 신뢰도가 낮은 구간은 0으로 처리 (기존 set_to_zero 역할)
+        # 0.5 미만인 구간은 가창이 없는 것으로 간주
+        pitch_series[conf_series < 0.5] = 0
+        
+        # 4. 소절 타임스탬프
+        intervals = librosa.effects.split(y, top_db=30) 
+        timestamps = librosa.samples_to_time(intervals, sr=sr)
+        
+        # 5. 통합 저장 (.npz)
+        final_path = output_path.replace('.npy', '.npz')
+        np.savez(final_path, 
+                 mfcc_fingerprint=mfcc_scaled,
+                 pitch_series=pitch_series,  # 세미톤 단위
+                 pitch_times=time_series,
+                 pitch_confidence=conf_series,
+                 segments=timestamps,
+                 source_url=youtube_url)
+        
         return True
     except Exception as e:
-        print(f"❌ 특징 추출 실패: {e}")
+        print(f"❌ '{os.path.basename(file_path)}' 추출 실패: {e}")
         return False
 
 def auto_pipeline(song_list_file):
@@ -38,7 +71,7 @@ def auto_pipeline(song_list_file):
         song_title, url = [x.strip() for x in line.split('|')]
         
         final_vocal_path = os.path.join(db_dir, f"{song_title}_vocal.wav")
-        feature_path = os.path.join(feature_dir, f"{song_title}.npy")
+        feature_path = os.path.join(feature_dir, f"{song_title}.npz")
 
         # [중복 방지] 이미 결과물이 있다면 건너뜀
         if os.path.exists(final_vocal_path) and os.path.exists(feature_path):
@@ -76,7 +109,7 @@ def auto_pipeline(song_list_file):
                 os.replace(spleeter_out, final_vocal_path)
                 
                 # 3. 특징 추출 (나중에 매칭할 때 사용)
-                extract_features(final_vocal_path, feature_path)
+                extract_advanced_features(final_vocal_path, feature_path, url)
                 print(f"✅ 완료: {song_title}")
             
             # 4. 정리: 곡마다 생성된 임시 폴더 삭제
